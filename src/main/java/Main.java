@@ -38,6 +38,7 @@ public class Main {
                 .build();
 
         ChatCompletionTool readTool = createReadTool();
+        ChatCompletionTool writeTool = createWriteTool();
 
         List<ChatCompletionMessageParam> messages = new ArrayList<>();
         messages.add(ChatCompletionMessageParam.ofUser(
@@ -51,6 +52,7 @@ public class Main {
                     ChatCompletionCreateParams.builder()
                             .model("anthropic/claude-haiku-4.5")
                             .addTool(readTool)
+                            .addTool(writeTool)
                             .maxTokens(1000)
                             .messages(messages);
 
@@ -68,7 +70,6 @@ public class Main {
 
             if (assistantMessage.toolCalls().isEmpty() ||
                     assistantMessage.toolCalls().get().isEmpty()) {
-                // Tool yo'q — yakuniy javob
                 System.out.print(assistantMessage.content().orElse(""));
                 return;
             }
@@ -114,6 +115,40 @@ public class Main {
                 .build();
     }
 
+    private static ChatCompletionTool createWriteTool(){
+        Map<String, Object> filePathProperty = Map.of(
+                "type", "string",
+                "description", "The path to the file to write"
+        );
+
+        Map<String, Object> contentProperty = Map.of(
+                "type", "string",
+                "description", "The content to write to the file"
+        );
+
+        Map<String, Object> properties = Map.of(
+                "file_path", filePathProperty,
+                "content", contentProperty
+        );
+
+        FunctionParameters parameters = FunctionParameters.builder()
+                .putAdditionalProperty("type", JsonValue.from("object"))
+                .putAdditionalProperty("properties", JsonValue.from(properties))
+                .putAdditionalProperty("required", JsonValue.from(List.of("file_path", "content")))
+                .build();
+
+        FunctionDefinition function = FunctionDefinition.builder()
+                .name("Write")
+                .description("Write content to a file")
+                .parameters(parameters)
+                .build();
+
+        return ChatCompletionTool.builder()
+                .type(JsonValue.from("function"))
+                .function(function)
+                .build();
+    }
+
     private static String executeToolCall(ChatCompletionMessageToolCall toolCall) throws Exception {
         String functionName = toolCall.function().name();
         String argumentsJson = toolCall.function().arguments();
@@ -124,6 +159,11 @@ public class Main {
         if ("Read".equals(functionName)) {
             String filePath = args.get("file_path").asText();
             return Files.readString(Paths.get(filePath));
+        }else if("Write".equals(functionName)){
+            String filePath = args.get("file_path").asText();
+            String content = args.get("content").asText();
+            Files.writeString(Paths.get(filePath), content);
+            return "File written successfully";
         }
 
         throw new RuntimeException("Unknown tool: " + functionName);
