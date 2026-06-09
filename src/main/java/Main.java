@@ -39,6 +39,7 @@ public class Main {
 
         ChatCompletionTool readTool = createReadTool();
         ChatCompletionTool writeTool = createWriteTool();
+        ChatCompletionTool bashTool = createBashTool();
 
         List<ChatCompletionMessageParam> messages = new ArrayList<>();
         messages.add(ChatCompletionMessageParam.ofUser(
@@ -53,6 +54,7 @@ public class Main {
                             .model("anthropic/claude-haiku-4.5")
                             .addTool(readTool)
                             .addTool(writeTool)
+                            .addTool(bashTool)
                             .maxTokens(1000)
                             .messages(messages);
 
@@ -149,6 +151,34 @@ public class Main {
                 .build();
     }
 
+    private static ChatCompletionTool createBashTool(){
+        Map<String, Object> commandProperty = Map.of(
+                "type", "string",
+                "description", "The command to execute"
+        );
+
+        Map<String, Object> properties = Map.of(
+                "command", commandProperty
+        );
+
+        FunctionParameters parameters = FunctionParameters.builder()
+                .putAdditionalProperty("type", JsonValue.from("object"))
+                .putAdditionalProperty("properties", JsonValue.from(properties))
+                .putAdditionalProperty("required", JsonValue.from(List.of("command")))
+                .build();
+
+        FunctionDefinition function = FunctionDefinition.builder()
+                .name("Bash")
+                .description("Execute a shell command")
+                .parameters(parameters)
+                .build();
+
+        return ChatCompletionTool.builder()
+                .type(JsonValue.from("function"))
+                .function(function)
+                .build();
+    }
+
     private static String executeToolCall(ChatCompletionMessageToolCall toolCall) throws Exception {
         String functionName = toolCall.function().name();
         String argumentsJson = toolCall.function().arguments();
@@ -164,6 +194,11 @@ public class Main {
             String content = args.get("content").asText();
             Files.writeString(Paths.get(filePath), content);
             return "File written successfully";
+        }else if("Bash".equals(functionName)){
+            String command = args.get("command").asText();
+            Process process = Runtime.getRuntime().exec(command);
+            process.waitFor();
+            return new String(process.getInputStream().readAllBytes());
         }
 
         throw new RuntimeException("Unknown tool: " + functionName);
