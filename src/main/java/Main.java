@@ -1,17 +1,20 @@
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
 import com.openai.models.FunctionParameters;
-import com.openai.models.chat.completions.ChatCompletion;
-import com.openai.models.chat.completions.ChatCompletionCreateParams;
-import com.openai.models.chat.completions.ChatCompletionTool;
+import com.openai.models.chat.completions.*;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 
 public class Main {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws IOException {
         if (args.length < 2 || !"-p".equals(args[0])) {
             System.err.println("Usage: program -p <prompt>");
             System.exit(1);
@@ -46,14 +49,22 @@ public class Main {
                         .build()
         );
 
+        ChatCompletion.Choice choice = response.choices().get(0);
+        ChatCompletionMessage message = choice.message();
+
+
         if (response.choices().isEmpty()) {
             throw new RuntimeException("no choices in response");
         }
-
-        // You can use print statements as follows for debugging, they'll be visible when running tests.
         System.err.println("Logs from your program will appear here!");
 
-        System.out.print(response.choices().get(0).message().content().orElse(""));
+        if (message.toolCalls().isPresent() && !message.toolCalls().get().isEmpty()) {
+            handleToolCall(message.toolCalls().get().get(0));
+        } else {
+            System.out.print(message.content().orElse(""));
+        }
+
+
     }
 
     private static ChatCompletionTool createReadTool() {
@@ -82,5 +93,22 @@ public class Main {
                 .type(JsonValue.from("function"))
                 .function(function)
                 .build();
+    }
+
+    private static void handleToolCall(ChatCompletionMessageToolCall toolCall) throws IOException {
+        String functionName = toolCall.function().name();
+        String argumentsJson = toolCall.function().arguments();
+
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode args = mapper.readTree(argumentsJson);
+
+        if ("Read".equals(functionName)) {
+            String filePath = args.get("file_path").asText();
+            String content = Files.readString(Paths.get(filePath));
+            System.out.print(content);
+        } else {
+            throw new RuntimeException("Unknown tool: " + functionName);
+        }
+
     }
 }
