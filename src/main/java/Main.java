@@ -7,14 +7,14 @@ import com.openai.models.FunctionDefinition;
 import com.openai.models.FunctionParameters;
 import com.openai.models.chat.completions.*;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 public class Main {
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws Exception {
         if (args.length < 2 || !"-p".equals(args[0])) {
             System.err.println("Usage: program -p <prompt>");
             System.exit(1);
@@ -39,32 +39,51 @@ public class Main {
 
         ChatCompletionTool readTool = createReadTool();
 
-
-        ChatCompletion response = client.chat().completions().create(
-                ChatCompletionCreateParams.builder()
-                        .model("anthropic/claude-haiku-4.5")
-                        .addTool(readTool)
-                        .addUserMessage(prompt)
-                        .maxTokens(1000)
+        List<ChatCompletionMessageParam> messages = new ArrayList<>();
+        messages.add(ChatCompletionMessageParam.ofUser(
+                ChatCompletionUserMessageParam.builder()
+                        .content(prompt)
                         .build()
-        );
+        ));
 
-        ChatCompletion.Choice choice = response.choices().get(0);
-        ChatCompletionMessage message = choice.message();
+        while (true) {
+            ChatCompletionCreateParams.Builder paramsBuilder =
+                    ChatCompletionCreateParams.builder()
+                            .model("anthropic/claude-haiku-4.5")
+                            .addTool(readTool)
+                            .maxTokens(1000)
+                            .messages(messages);
 
+            ChatCompletion response = client.chat().completions().create(paramsBuilder.build());
 
-        if (response.choices().isEmpty()) {
-            throw new RuntimeException("no choices in response");
+            if (response.choices().isEmpty()) {
+                throw new RuntimeException("no choices in response");
+            }
+
+            ChatCompletionMessage assistantMessage = response.choices().get(0).message();
+
+            messages.add(ChatCompletionMessageParam.ofAssistant(
+                    assistantMessageToParam(assistantMessage)
+            ));
+
+            if (assistantMessage.toolCalls().isEmpty() ||
+                    assistantMessage.toolCalls().get().isEmpty()) {
+                // Tool yo'q — yakuniy javob
+                System.out.print(assistantMessage.content().orElse(""));
+                return;
+            }
+
+            for (ChatCompletionMessageToolCall toolCall : assistantMessage.toolCalls().get()) {
+                String result = executeToolCall(toolCall);
+
+                messages.add(ChatCompletionMessageParam.ofTool(
+                        ChatCompletionToolMessageParam.builder()
+                                .toolCallId(toolCall.id())
+                                .content(result)
+                                .build()
+                ));
+            }
         }
-        System.err.println("Logs from your program will appear here!");
-
-        if (message.toolCalls().isPresent() && !message.toolCalls().get().isEmpty()) {
-            handleToolCall(message.toolCalls().get().get(0));
-        } else {
-            System.out.print(message.content().orElse(""));
-        }
-
-
     }
 
     private static ChatCompletionTool createReadTool() {
@@ -95,7 +114,7 @@ public class Main {
                 .build();
     }
 
-    private static void handleToolCall(ChatCompletionMessageToolCall toolCall) throws IOException {
+    private static String executeToolCall(ChatCompletionMessageToolCall toolCall) throws Exception {
         String functionName = toolCall.function().name();
         String argumentsJson = toolCall.function().arguments();
 
@@ -104,11 +123,35 @@ public class Main {
 
         if ("Read".equals(functionName)) {
             String filePath = args.get("file_path").asText();
-            String content = Files.readString(Paths.get(filePath));
-            System.out.print(content);
-        } else {
-            throw new RuntimeException("Unknown tool: " + functionName);
+            return Files.readString(Paths.get(filePath));
         }
 
+        throw new RuntimeException("Unknown tool: " + functionName);
     }
+
+    private static ChatCompletionAssistantMessageParam assistantMessageToParam(
+            ChatCompletionMessage msg) {
+
+        ChatCompletionAssistantMessageParam.Builder builder =
+                ChatCompletionAssistantMessageParam.builder();
+
+        msg.content().ifPresent(builder::content);
+
+        msg.toolCalls().ifPresent(toolCalls -> {
+            List<ChatCompletionMessageToolCall> paramCalls = new ArrayList<>();
+            for (ChatCompletionMessageToolCall tc : toolCalls) {
+                paramCalls.add(ChatCompletionMessageToolCall.builder()
+                        .id(tc.id())
+                        .function(ChatCompletionMessageToolCall.Function.builder()
+                                .name(tc.function().name())
+                                .arguments(tc.function().arguments())
+                                .build())
+                        .build());
+            }
+            builder.toolCalls(paramCalls);
+        });
+
+        return builder.build();
+    }
+
 }
